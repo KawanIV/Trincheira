@@ -5,40 +5,43 @@ local CELL = 64
 local COLS, ROWS = 16, 6
 local RANGE_TIRO = 3
 local MOVIMENTO_PADRAO = 3
-local MOVIMENTO_APOS_CAVAR = 1   -- no turno seguinte, quem cavou só anda 1
+local MOVIMENTO_NA_TRINCHEIRA = 1
+local DANO_TIRO = 3
+local DANO_CARGA = 5
 
 local PAINEL_H = 260
 local GRID_OFFSET_Y = PAINEL_H
 
 local unidades = {}
+local trincheiras = {}   -- NOVO: trincheiras[y][x] = true
 local turnoAtual = 1
 local selecionada = nil
 local vencedor = nil
 
 local menuAberto = false
 local modoMover = false
+local modoCarga = false
 local cena = nil
 local botoesMenu = {}
 
--- ========== PROJEÇÃO DE PERSPECTIVA ==========
+local resolvendo = false
+local filaResolucao = {}
+local indiceResolucao = 0
 
--- Escala por profundidade: y=1 (fundo) menor, y=ROWS (frente) maior
+-- ========== PROJEÇÃO ==========
 local function escalaPorLinha(y)
     if ROWS <= 1 then return 1.0 end
-    local t = (y - 1) / (ROWS - 1)   -- 0 no fundo, 1 na frente
+    local t = (y - 1) / (ROWS - 1)
     return 0.55 + 0.45 * t
 end
 
--- Y na tela do painel superior para a faixa da linha y
 local function yTelaDaLinha(y)
-    -- margem vertical dentro do painel
     local margemTopo = PAINEL_H * 0.12
     local margemBase = PAINEL_H * 0.92
     local t = (y - 1) / math.max(ROWS - 1, 1)
     return margemTopo + (margemBase - margemTopo) * t
 end
 
--- X na tela do painel superior para a coluna x na linha y
 local function xTelaDaColuna(x, y)
     local larguraMax = love.graphics.getWidth() * 0.9
     local larguraFaixa = larguraMax * escalaPorLinha(y)
@@ -47,107 +50,35 @@ local function xTelaDaColuna(x, y)
     return esquerda + larguraFaixa * t
 end
 
--- Tamanho do quadrado na tela para a linha y
 local function tamanhoNaLinha(y)
     return 44 * escalaPorLinha(y)
 end
 
--- ========== LÓGICA ==========
-
-function Jogo:load()
-    unidades = {}
-    turnoAtual = 1
-    selecionada = nil
-    vencedor = nil
-    menuAberto = false
-    modoMover = false
-    cena = nil
-    botoesMenu = {}
-
-    for i = 1, 3 do
-        table.insert(unidades, {
-            x=1, y=i+1, hp=10, faccao=1, jaAgiu=false, entrincheirada=false,
-            movimentoMax = MOVIMENTO_PADRAO,
-            movimentoRestante = MOVIMENTO_PADRAO,
-        })
-        table.insert(unidades, {
-            x=COLS, y=i+1, hp=10, faccao=2, jaAgiu=false, entrincheirada=false,
-            movimentoMax = MOVIMENTO_PADRAO,
-            movimentoRestante = MOVIMENTO_PADRAO,
-        })
-    end
+-- ========== TRINCHEIRAS ==========
+local function temTrincheira(cx, cy)
+    return trincheiras[cy] and trincheiras[cy][cx] == true
 end
 
--- distância de Manhattan entre duas células
-local function distManhattan(ax, ay, bx, by)
-    return math.abs(ax - bx) + math.abs(ay - by)
+local function marcarTrincheira(cx, cy)
+    trincheiras[cy] = trincheiras[cy] or {}
+    trincheiras[cy][cx] = true
 end
 
--- célula alcançável? dentro do grid, sem unidade, e dentro do orçamento
-local function celulaAlcancavel(u, cx, cy)
-    if cx < 1 or cx > COLS or cy < 1 or cy > ROWS then return false end
-    if unidadeEm(cx, cy) then return false end
-    return distManhattan(u.x, u.y, cx, cy) <= u.movimentoRestante
-end
-
--- executa o movimento até (cx, cy), gastando orçamento
-local function moverAte(u, cx, cy)
-    local custo = distManhattan(u.x, u.y, cx, cy)
-    if custo > u.movimentoRestante then return false end
-    if unidadeEm(cx, cy) then return false end
-    u.x = cx
-    u.y = cy
-    u.movimentoRestante = u.movimentoRestante - custo
-    -- se acabou o movimento, a unidade não pode mais agir neste turno
-    if u.movimentoRestante <= 0 then
-        u.jaAgiu = true
-    end
-    return true
-end
-
-function Jogo:update(dt)
-    if vencedor then return end
-
-    if cena then
-        cena.t = cena.t + dt
-        if cena.t >= cena.duracao then
-            if cena.tipo == "tiro" and cena.alvo then
-                cena.alvo.hp = cena.alvo.hp - 3
-            elseif cena.tipo == "carga" and cena.alvo then
-                cena.alvo.hp = cena.alvo.hp - 5
-            elseif cena.tipo == "cavar" and cena.atacante then
-                cena.atacante.entrincheirada = true
-            end
-            if cena.atacante then cena.atacante.jaAgiu = true end
-            cena = nil
-            selecionada = nil
-            menuAberto = false
-            modoMover = false
-        end
-        return
-    end
-
-    local vivos1, vivos2 = 0, 0
-    for _, u in ipairs(unidades) do
-        if u.hp > 0 then
-            if u.faccao == 1 then vivos1 = vivos1 + 1
-            else vivos2 = vivos2 + 1 end
-        end
-    end
-    if vivos1 == 0 then vencedor = 2
-    elseif vivos2 == 0 then vencedor = 1 end
-end
-
+-- ========== HELPERS ==========
 local function unidadeEm(cx, cy)
     for _, u in ipairs(unidades) do
         if u.x == cx and u.y == cy and u.hp > 0 then return u end
     end
 end
 
-local function podeMover(u, dx, dy)
-    local nx, ny = u.x + dx, u.y + dy
-    if nx < 1 or nx > COLS or ny < 1 or ny > ROWS then return false end
-    return unidadeEm(nx, ny) == nil
+local function distManhattan(ax, ay, bx, by)
+    return math.abs(ax - bx) + math.abs(ay - by)
+end
+
+local function celulaAlcancavel(u, cx, cy)
+    if cx < 1 or cx > COLS or cy < 1 or cy > ROWS then return false end
+    if unidadeEm(cx, cy) then return false end
+    return distManhattan(u.x, u.y, cx, cy) <= u.movimentoRestante
 end
 
 local function alvoNoRangeTiro(atacante, alvo)
@@ -162,16 +93,6 @@ local function alvoNoRangeTiro(atacante, alvo)
         cx, cy = cx + dx, cy + dy
     end
     return true
-end
-
-local function temInimigoAdjacente(u)
-    for _, o in ipairs(unidades) do
-        if o.hp > 0 and o.faccao ~= u.faccao
-           and math.abs(o.x - u.x) <= 1 and math.abs(o.y - u.y) <= 1 then
-            return true
-        end
-    end
-    return false
 end
 
 local function inimigoNoRangeTiro(u)
@@ -191,7 +112,7 @@ local function calcularBotoesMenu(u)
 
     local candidatos = {
         {id="mover", label="Mover", dx=0,  dy=-1, sempre=true},
-        {id="carga", label="Carga", dx=0,  dy=1,  valido=temInimigoAdjacente(u)},
+        {id="carga", label="Carga", dx=0,  dy=1,  sempre=true},
         {id="tiro",  label="Tiro",  dx=-1, dy=0,  valido=inimigoNoRangeTiro(u)},
         {id="cavar", label="Cavar", dx=1,  dy=0,  sempre=true},
     }
@@ -208,16 +129,173 @@ local function calcularBotoesMenu(u)
     end
 end
 
--- ========== DESENHO DO PAINEL SUPERIOR (MIRROR COM PERSPECTIVA) ==========
+local function temOrdem(u)
+    return u.ordem ~= nil
+end
+
+-- ========== LOAD / UPDATE ==========
+function Jogo:load()
+    unidades = {}
+    trincheiras = {}
+    turnoAtual = 1
+    selecionada = nil
+    vencedor = nil
+    menuAberto = false
+    modoMover = false
+    modoCarga = false
+    cena = nil
+    botoesMenu = {}
+    resolvendo = false
+    filaResolucao = {}
+    indiceResolucao = 0
+
+    for i = 1, 3 do
+        table.insert(unidades, {
+            x=1, y=i+1, hp=10, faccao=1, jaAgiu=false,
+            movimentoMax = MOVIMENTO_PADRAO,
+            movimentoRestante = MOVIMENTO_PADRAO,
+            ordem = nil,
+        })
+        table.insert(unidades, {
+            x=COLS, y=i+1, hp=10, faccao=2, jaAgiu=false,
+            movimentoMax = MOVIMENTO_PADRAO,
+            movimentoRestante = MOVIMENTO_PADRAO,
+            ordem = nil,
+        })
+    end
+end
+
+local function montarFila()
+    filaResolucao = {}
+    for _, u in ipairs(unidades) do
+        if u.hp > 0 and u.faccao == 1 and u.ordem then
+            table.insert(filaResolucao, u)
+        end
+    end
+    for _, u in ipairs(unidades) do
+        if u.hp > 0 and u.faccao == 2 and u.ordem then
+            table.insert(filaResolucao, u)
+        end
+    end
+    indiceResolucao = 0
+end
+
+-- NOVO: aplica o efeito de uma ordem no fim da cena
+local function aplicarOrdem(u, o)
+    if o.tipo == "mover" then
+        local custo = distManhattan(u.x, u.y, o.x, o.y)
+        u.x, u.y = o.x, o.y
+        u.movimentoRestante = math.max(0, u.movimentoRestante - custo)
+        u.jaAgiu = true
+    elseif o.tipo == "cavar" then
+        marcarTrincheira(u.x, u.y)   -- marca a CÉLULA, não a unidade
+        u.jaAgiu = true
+    elseif o.tipo == "tiro" and o.alvo and o.alvo.hp > 0 then
+        if not temTrincheira(o.alvo.x, o.alvo.y) then
+            o.alvo.hp = o.alvo.hp - DANO_TIRO
+        end
+        u.jaAgiu = true
+    elseif o.tipo == "carga" then
+        local dx = (o.x > u.x) and 1 or (o.x < u.x and -1 or 0)
+        local dy = (o.y > u.y) and 1 or (o.y < u.y and -1 or 0)
+        if dx == 0 and dy == 0 then u.jaAgiu = true; return end
+        local cx, cy = u.x + dx, u.y + dy
+        while cx >= 1 and cx <= COLS and cy >= 1 and cy <= ROWS do
+            local alvo = unidadeEm(cx, cy)
+            if alvo and alvo.faccao ~= u.faccao then
+                alvo.hp = alvo.hp - DANO_CARGA
+                break
+            elseif alvo then
+                break
+            end
+            u.x, u.y = cx, cy
+            if cx == o.x and cy == o.y then break end
+            cx, cy = cx + dx, cy + dy
+        end
+        u.jaAgiu = true
+    end
+    u.ordem = nil
+end
+
+local function avancarResolucao()
+    indiceResolucao = indiceResolucao + 1
+    local u = filaResolucao[indiceResolucao]
+    if not u then
+        resolvendo = false
+        turnoAtual = (turnoAtual == 1) and 2 or 1
+        for _, un in ipairs(unidades) do
+            un.jaAgiu = false
+            -- NOVO: movimento depende da célula onde a unidade está
+            if temTrincheira(un.x, un.y) then
+                un.movimentoRestante = MOVIMENTO_NA_TRINCHEIRA
+            else
+                un.movimentoRestante = MOVIMENTO_PADRAO
+            end
+            un.ordem = nil
+        end
+        selecionada = nil
+        return
+    end
+    if u.ordem then
+        local tipo = u.ordem.tipo
+        local alvo = u.ordem.alvo
+        cena = {tipo=tipo, atacante=u, alvo=alvo, t=0, duracao=0.6, ordem=u.ordem}
+    else
+        aplicarOrdem(u, u.ordem)
+    end
+end
+
+function Jogo:update(dt)
+    if vencedor then return end
+
+    if resolvendo then
+        if cena then
+            cena.t = cena.t + dt
+            if cena.t >= cena.duracao then
+                if cena.ordem then
+                    aplicarOrdem(cena.atacante, cena.ordem)
+                end
+                cena = nil
+                avancarResolucao()
+            end
+        else
+            avancarResolucao()
+        end
+        return
+    end
+
+    local vivos1, vivos2 = 0, 0
+    for _, u in ipairs(unidades) do
+        if u.hp > 0 then
+            if u.faccao == 1 then vivos1 = vivos1 + 1
+            else vivos2 = vivos2 + 1 end
+        end
+    end
+    if vivos1 == 0 then vencedor = 2
+    elseif vivos2 == 0 then vencedor = 1 end
+end
+
+-- ========== DESENHO ==========
+local function desenharTrincheirasSuperior()
+    for cy, linha in pairs(trincheiras) do
+        for cx, _ in pairs(linha) do
+            local px = xTelaDaColuna(cx, cy)
+            local py = yTelaDaLinha(cy)
+            local tam = tamanhoNaLinha(cy)
+            love.graphics.setColor(0.4, 0.28, 0.12, 0.85)
+            love.graphics.rectangle("fill", px - tam/2, py - tam/2, tam, tam)
+            love.graphics.setColor(0.5, 0.35, 0.15)
+            love.graphics.rectangle("line", px - tam/2, py - tam/2, tam, tam)
+        end
+    end
+end
 
 local function desenharPainelSuperior()
-    -- céu e chão
     love.graphics.setColor(0.55, 0.65, 0.75)
     love.graphics.rectangle("fill", 0, 0, love.graphics.getWidth(), PAINEL_H)
     love.graphics.setColor(0.35, 0.45, 0.30)
     love.graphics.rectangle("fill", 0, PAINEL_H * 0.5, love.graphics.getWidth(), PAINEL_H * 0.5)
 
-    -- faixas de profundidade (linhas guias)
     for y = 1, ROWS do
         local yTela = yTelaDaLinha(y)
         local x1 = xTelaDaColuna(1, y)
@@ -226,20 +304,22 @@ local function desenharPainelSuperior()
         love.graphics.line(x1, yTela, x2, yTela)
     end
 
-    -- projeta todas as unidades do grid (incluindo as que estão na cena de ação)
+    -- NOVO: trincheiras desenhadas antes das unidades (ficam "no chão")
+    desenharTrincheirasSuperior()
+
     for _, u in ipairs(unidades) do
         if u.hp > 0 then
             local px = xTelaDaColuna(u.x, u.y)
             local py = yTelaDaLinha(u.y)
             local tam = tamanhoNaLinha(u.y)
 
-            -- se a unidade é o atacante de uma carga, desloca na animação
-            if cena and cena.tipo == "carga" and cena.atacante == u and cena.alvo then
+            if cena and cena.tipo == "carga" and cena.atacante == u and cena.ordem then
                 local progresso = math.min(cena.t / cena.duracao, 1)
-                local ax = xTelaDaColuna(cena.atacante.x, cena.atacante.y)
-                local ay = yTelaDaLinha(cena.atacante.y)
-                local bx = xTelaDaColuna(cena.alvo.x, cena.alvo.y)
-                local by = yTelaDaLinha(cena.alvo.y)
+                local o = cena.ordem
+                local ax = xTelaDaColuna(u.x, u.y)
+                local ay = yTelaDaLinha(u.y)
+                local bx = xTelaDaColuna(o.x, o.y)
+                local by = yTelaDaLinha(o.y)
                 px = ax + (bx - ax) * progresso
                 py = ay + (by - ay) * progresso
             end
@@ -249,9 +329,9 @@ local function desenharPainelSuperior()
             love.graphics.setColor(cor)
             love.graphics.rectangle("fill", px - tam/2, py - tam/2, tam, tam)
 
-            if u.entrincheirada then
-                love.graphics.setColor(0.5, 0.35, 0.15)
-                love.graphics.rectangle("line", px - tam/2 - 3, py - tam/2 - 3, tam + 6, tam + 6)
+            if temOrdem(u) then
+                love.graphics.setColor(0, 1, 1)
+                love.graphics.rectangle("line", px - tam/2 - 6, py - tam/2 - 6, tam + 12, tam + 12)
             end
 
             love.graphics.setColor(1,1,1)
@@ -259,7 +339,6 @@ local function desenharPainelSuperior()
         end
     end
 
-    -- projétil do tiro: viaja entre as posições projetadas reais
     if cena and cena.tipo == "tiro" and cena.atacante and cena.alvo then
         local progresso = math.min(cena.t / cena.duracao, 1)
         local ax = xTelaDaColuna(cena.atacante.x, cena.atacante.y)
@@ -272,7 +351,6 @@ local function desenharPainelSuperior()
         love.graphics.circle("fill", px, py, 6)
     end
 
-    -- terra subindo na cova (cavar)
     if cena and cena.tipo == "cavar" and cena.atacante then
         local progresso = math.min(cena.t / cena.duracao, 1)
         local px = xTelaDaColuna(cena.atacante.x, cena.atacante.y)
@@ -283,13 +361,36 @@ local function desenharPainelSuperior()
     end
 
     love.graphics.setColor(1,1,1)
-    love.graphics.print("Painel superior (perspectiva) - espelho do grid", 10, 10)
+    love.graphics.print("Painel superior (perspectiva)", 10, 10)
+end
+
+local function desenharRotas()
+    for _, u in ipairs(unidades) do
+        if u.hp > 0 and u.ordem and (u.ordem.tipo == "mover" or u.ordem.tipo == "carga") then
+            local o = u.ordem
+            if o.tipo == "mover" then
+                love.graphics.setColor(0, 1, 0, 0.6)
+            else
+                love.graphics.setColor(1, 0.5, 0, 0.6)
+            end
+            local x1 = (u.x - 1) * CELL + CELL/2
+            local y1 = (u.y - 1) * CELL + CELL/2
+            local x2 = (o.x - 1) * CELL + CELL/2
+            local y2 = (o.y - 1) * CELL + CELL/2
+            local passos = 12
+            for i = 1, passos do
+                local t = i / passos
+                local px = x1 + (x2 - x1) * t
+                local py = y1 + (y2 - y1) * t
+                love.graphics.circle("fill", px, py, 2)
+            end
+        end
+    end
 end
 
 function Jogo:draw()
     desenharPainelSuperior()
 
-    -- painel tático
     love.graphics.push()
     love.graphics.translate(0, GRID_OFFSET_Y)
 
@@ -301,7 +402,17 @@ function Jogo:draw()
         love.graphics.line(0, y*CELL, COLS*CELL, y*CELL)
     end
 
-    if selecionada and not menuAberto then
+    -- NOVO: trincheiras no grid inferior
+    for cy, linha in pairs(trincheiras) do
+        for cx, _ in pairs(linha) do
+            love.graphics.setColor(0.4, 0.28, 0.12, 0.85)
+            love.graphics.rectangle("fill", (cx-1)*CELL, (cy-1)*CELL, CELL, CELL)
+            love.graphics.setColor(0.5, 0.35, 0.15)
+            love.graphics.rectangle("line", (cx-1)*CELL+1, (cy-1)*CELL+1, CELL-2, CELL-2)
+        end
+    end
+
+    if selecionada and not menuAberto and not modoMover and not modoCarga then
         love.graphics.setColor(1, 1, 0, 0.15)
         for _, u in ipairs(unidades) do
             if u.hp > 0 and u.faccao ~= selecionada.faccao and alvoNoRangeTiro(selecionada, u) then
@@ -311,14 +422,28 @@ function Jogo:draw()
     end
 
     if modoMover and selecionada then
-        love.graphics.setColor(0, 1, 0, 0.2)
-        for _, d in ipairs({{1,0},{-1,0},{0,1},{0,-1}}) do
-            local nx, ny = selecionada.x + d[1], selecionada.y + d[2]
-            if nx >= 1 and nx <= COLS and ny >= 1 and ny <= ROWS and not unidadeEm(nx, ny) then
-                love.graphics.rectangle("fill", (nx-1)*CELL, (ny-1)*CELL, CELL, CELL)
+        love.graphics.setColor(0, 1, 0, 0.25)
+        for cy = 1, ROWS do
+            for cx = 1, COLS do
+                if celulaAlcancavel(selecionada, cx, cy) then
+                    love.graphics.rectangle("fill", (cx-1)*CELL, (cy-1)*CELL, CELL, CELL)
+                end
             end
         end
     end
+
+    if modoCarga and selecionada then
+        love.graphics.setColor(1, 0.5, 0, 0.25)
+        for cy = 1, ROWS do
+            for cx = 1, COLS do
+                if celulaAlcancavel(selecionada, cx, cy) then
+                    love.graphics.rectangle("fill", (cx-1)*CELL, (cy-1)*CELL, CELL, CELL)
+                end
+            end
+        end
+    end
+
+    desenharRotas()
 
     for _, u in ipairs(unidades) do
         if u.hp > 0 then
@@ -326,9 +451,9 @@ function Jogo:draw()
             if u.jaAgiu then cor = {0.5,0.5,0.5} end
             love.graphics.setColor(cor)
             love.graphics.rectangle("fill", (u.x-1)*CELL+4, (u.y-1)*CELL+4, CELL-8, CELL-8)
-            if u.entrincheirada then
-                love.graphics.setColor(0.5, 0.35, 0.15)
-                love.graphics.rectangle("line", (u.x-1)*CELL+2, (u.y-1)*CELL+2, CELL-4, CELL-4)
+            if temOrdem(u) then
+                love.graphics.setColor(0, 1, 1)
+                love.graphics.rectangle("line", (u.x-1)*CELL+1, (u.y-1)*CELL+1, CELL-2, CELL-2)
             end
             love.graphics.setColor(1,1,1)
             love.graphics.print(tostring(u.hp), (u.x-1)*CELL+6, (u.y-1)*CELL+4)
@@ -342,7 +467,6 @@ function Jogo:draw()
 
     love.graphics.pop()
 
-    -- botões do menu ao redor da unidade
     if menuAberto and selecionada then
         for _, b in ipairs(botoesMenu) do
             love.graphics.setColor(b.habilitado and {0.2,0.2,0.2,0.9} or {0.15,0.15,0.15,0.6})
@@ -353,26 +477,31 @@ function Jogo:draw()
         end
     end
 
-    -- UI inferior
     love.graphics.setColor(1,1,1)
     if vencedor then
         love.graphics.print(vencedor == 1 and "Jogador venceu!" or "Inimigo venceu!",
             10, GRID_OFFSET_Y + ROWS*CELL + 10)
+    elseif resolvendo then
+        love.graphics.print("Resolvendo ordens...", 10, GRID_OFFSET_Y + ROWS*CELL + 10)
     else
         love.graphics.print("Turno: " .. (turnoAtual == 1 and "Jogador" or "Inimigo"),
             10, GRID_OFFSET_Y + ROWS*CELL + 10)
         if modoMover then
-            love.graphics.print("Clique numa célula verde para mover | ESC cancela",
+            love.graphics.print("Clique numa célula verde para enfileirar movimento | ESC cancela",
+                10, GRID_OFFSET_Y + ROWS*CELL + 30)
+        elseif modoCarga then
+            love.graphics.print("Clique numa célula laranja para enfileirar carga | ESC cancela",
                 10, GRID_OFFSET_Y + ROWS*CELL + 30)
         else
-            love.graphics.print("Clique numa unidade para abrir ações | Espaço = passar turno",
+            love.graphics.print("Dê ordens e aperte ESPAÇO para resolver | ESC cancela",
                 10, GRID_OFFSET_Y + ROWS*CELL + 30)
         end
     end
 end
 
+-- ========== INPUT ==========
 function Jogo:mousepressed(mx, my, botao)
-    if vencedor or cena then return end
+    if vencedor or cena or resolvendo then return end
 
     if menuAberto and selecionada then
         for _, b in ipairs(botoesMenu) do
@@ -382,19 +511,12 @@ function Jogo:mousepressed(mx, my, botao)
                     if b.id == "mover" then
                         modoMover = true
                         menuAberto = false
-                    elseif b.id == "cavar" then
-                        cena = {tipo="cavar", atacante=selecionada, alvo=nil, t=0, duracao=0.8}
-                        menuAberto = false
                     elseif b.id == "carga" then
-                        local alvo = nil
-                        for _, o in ipairs(unidades) do
-                            if o.hp > 0 and o.faccao ~= selecionada.faccao
-                               and math.abs(o.x - selecionada.x) <= 1
-                               and math.abs(o.y - selecionada.y) <= 1 then
-                                alvo = o; break
-                            end
-                        end
-                        cena = {tipo="carga", atacante=selecionada, alvo=alvo, t=0, duracao=0.8}
+                        modoCarga = true
+                        menuAberto = false
+                    elseif b.id == "cavar" then
+                        selecionada.ordem = {tipo="cavar"}
+                        selecionada = nil
                         menuAberto = false
                     elseif b.id == "tiro" then
                         local alvo = nil
@@ -404,7 +526,8 @@ function Jogo:mousepressed(mx, my, botao)
                                 alvo = o; break
                             end
                         end
-                        cena = {tipo="tiro", atacante=selecionada, alvo=alvo, t=0, duracao=0.8}
+                        selecionada.ordem = {tipo="tiro", alvo=alvo}
+                        selecionada = nil
                         menuAberto = false
                     end
                 end
@@ -422,22 +545,28 @@ function Jogo:mousepressed(mx, my, botao)
     local alvo = unidadeEm(cx, cy)
 
     if modoMover and selecionada then
-        local dx = math.max(-1, math.min(1, cx - selecionada.x))
-        local dy = math.max(-1, math.min(1, cy - selecionada.y))
-        if podeMover(selecionada, dx, dy) then
-            selecionada.x = selecionada.x + dx
-            selecionada.y = selecionada.y + dy
-            selecionada.jaAgiu = true
+        if celulaAlcancavel(selecionada, cx, cy) then
+            selecionada.ordem = {tipo="mover", x=cx, y=cy}
             selecionada = nil
             modoMover = false
         end
         return
     end
 
-    if alvo and alvo.faccao == turnoAtual and not alvo.jaAgiu then
+    if modoCarga and selecionada then
+        if celulaAlcancavel(selecionada, cx, cy) then
+            selecionada.ordem = {tipo="carga", x=cx, y=cy}
+            selecionada = nil
+            modoCarga = false
+        end
+        return
+    end
+
+    if alvo and alvo.faccao == turnoAtual and alvo.hp > 0 then
         selecionada = alvo
         menuAberto = true
         modoMover = false
+        modoCarga = false
         calcularBotoesMenu(alvo)
         return
     end
@@ -447,19 +576,36 @@ function Jogo:keypressed(tecla)
     if tecla == "escape" then
         menuAberto = false
         modoMover = false
+        modoCarga = false
         selecionada = nil
         return
     end
-    if tecla == "space" and not vencedor and not cena and not menuAberto and not modoMover then
-        turnoAtual = (turnoAtual == 1) and 2 or 1
-        for _, u in ipairs(unidades) do
-            u.jaAgiu = false
-            -- quem cavou no turno anterior começa com menos movimento
-            if u.entrincheirada then
-                u.movimentoRestante = MOVIMENTO_APOS_CAVAR
-                u.entrincheirada = false   -- consome o efeito (opcional: manter a trincheira visual?)
+    if tecla == "space" and not vencedor and not cena and not resolvendo
+       and not menuAberto and not modoMover and not modoCarga then
+        if turnoAtual == 1 then
+            montarFila()
+            if #filaResolucao == 0 then
+                turnoAtual = 2
+                for _, u in ipairs(unidades) do
+                    u.jaAgiu = false
+                    if temTrincheira(u.x, u.y) then
+                        u.movimentoRestante = MOVIMENTO_NA_TRINCHEIRA
+                    else
+                        u.movimentoRestante = MOVIMENTO_PADRAO
+                    end
+                end
             else
-                u.movimentoRestante = MOVIMENTO_PADRAO
+                resolvendo = true
+            end
+        else
+            turnoAtual = 1
+            for _, u in ipairs(unidades) do
+                u.jaAgiu = false
+                if temTrincheira(u.x, u.y) then
+                    u.movimentoRestante = MOVIMENTO_NA_TRINCHEIRA
+                else
+                    u.movimentoRestante = MOVIMENTO_PADRAO
+                end
             end
         end
         selecionada = nil
