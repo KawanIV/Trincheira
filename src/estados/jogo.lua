@@ -13,7 +13,7 @@ local PAINEL_H = 260
 local GRID_OFFSET_Y = PAINEL_H
 
 local unidades = {}
-local trincheiras = {}   -- NOVO: trincheiras[y][x] = true
+local trincheiras = {}
 local turnoAtual = 1
 local selecionada = nil
 local vencedor = nil
@@ -27,6 +27,10 @@ local botoesMenu = {}
 local resolvendo = false
 local filaResolucao = {}
 local indiceResolucao = 0
+
+-- NOVO: Variáveis para o Sprite
+local spriteSheet
+local quads = {}
 
 -- ========== PROJEÇÃO ==========
 local function escalaPorLinha(y)
@@ -149,6 +153,15 @@ function Jogo:load()
     filaResolucao = {}
     indiceResolucao = 0
 
+    -- NOVO: Carrega a imagem e define os quadros
+    -- Certifique-se de que a pasta 'assets' e a imagem 'infantaria.png' existam!
+    spriteSheet = love.graphics.newImage("assets/imagens/infantariaalema.jpg")
+    local w, h = 76, 76 -- Tamanho estimado de cada sprite
+    local imgW, imgH = spriteSheet:getDimensions()
+    
+    quads.parado = love.graphics.newQuad(5, 0, w, h, imgW, imgH)
+    quads.andando = love.graphics.newQuad(w, h, w, h, imgW, imgH) -- Ajuste as coordenadas conforme a imagem real
+
     for i = 1, 3 do
         table.insert(unidades, {
             x=1, y=i+1, hp=10, faccao=1, jaAgiu=false,
@@ -180,7 +193,6 @@ local function montarFila()
     indiceResolucao = 0
 end
 
--- NOVO: aplica o efeito de uma ordem no fim da cena
 local function aplicarOrdem(u, o)
     if o.tipo == "mover" then
         local custo = distManhattan(u.x, u.y, o.x, o.y)
@@ -188,7 +200,7 @@ local function aplicarOrdem(u, o)
         u.movimentoRestante = math.max(0, u.movimentoRestante - custo)
         u.jaAgiu = true
     elseif o.tipo == "cavar" then
-        marcarTrincheira(u.x, u.y)   -- marca a CÉLULA, não a unidade
+        marcarTrincheira(u.x, u.y)
         u.jaAgiu = true
     elseif o.tipo == "tiro" and o.alvo and o.alvo.hp > 0 then
         if not temTrincheira(o.alvo.x, o.alvo.y) then
@@ -225,7 +237,6 @@ local function avancarResolucao()
         turnoAtual = (turnoAtual == 1) and 2 or 1
         for _, un in ipairs(unidades) do
             un.jaAgiu = false
-            -- NOVO: movimento depende da célula onde a unidade está
             if temTrincheira(un.x, un.y) then
                 un.movimentoRestante = MOVIMENTO_NA_TRINCHEIRA
             else
@@ -291,43 +302,28 @@ local function desenharTrincheirasSuperior()
 end
 
 local function desenharPainelSuperior()
-    -- Céu com gradiente (amarelo/laranja do 1066)
+    -- Céu com gradiente (amarelo/laranja)
     love.graphics.setColor(0.9, 0.8, 0.5)
     love.graphics.rectangle("fill", 0, 0, love.graphics.getWidth(), PAINEL_H * 0.6)
     -- Chão (terra escura)
     love.graphics.setColor(0.2, 0.15, 0.1)
     love.graphics.rectangle("fill", 0, PAINEL_H * 0.6, love.graphics.getWidth(), PAINEL_H * 0.4)
 
-    -- Árvores/silhuetas no fundo (apenas para dar ambientação, opcional)
+    -- Árvores/silhuetas no fundo
     love.graphics.setColor(0.1, 0.1, 0.1, 0.3)
-    love.graphics.circle("fill", 150, PAINEL_H * 0.5, 80) -- copa da árvore
-    love.graphics.rectangle("fill", 140, PAINEL_H * 0.5, 20, 100) -- tronco
+    love.graphics.circle("fill", 150, PAINEL_H * 0.5, 80)
+    love.graphics.rectangle("fill", 140, PAINEL_H * 0.5, 20, 100)
 
-    -- Desenha as trincheiras no terreno (do fundo para a frente)
-    for cy = 1, ROWS do
-        if trincheiras[cy] then
-            for cx, _ in pairs(trincheiras[cy]) do
-                local px = xTelaDaColuna(cx, cy)
-                local py = yTelaDaLinha(cy)
-                local tam = tamanhoNaLinha(cy)
-                
-                -- Trincheira com cor ajustada pela profundidade
-                love.graphics.setColor(0.3, 0.2, 0.1, escalaPorLinha(cy))
-                love.graphics.rectangle("fill", px - tam/2, py - tam/4, tam, tam/2)
-            end
-        end
-    end
+    desenharTrincheirasSuperior()
 
-    -- Desenha as unidades do FUNDO para a FRENTE (para sobreposição correta)
+    -- Desenha as unidades do FUNDO para a FRENTE
     for cy = 1, ROWS do
         for _, u in ipairs(unidades) do
             if u.hp > 0 and u.y == cy then
                 local px = xTelaDaColuna(u.x, u.y)
                 local py = yTelaDaLinha(u.y)
-                local tam = tamanhoNaLinha(u.y)
                 local escala = escalaPorLinha(u.y)
 
-                -- Animação de carga
                 if cena and cena.tipo == "carga" and cena.atacante == u and cena.ordem then
                     local progresso = math.min(cena.t / cena.duracao, 1)
                     local o = cena.ordem
@@ -339,31 +335,31 @@ local function desenharPainelSuperior()
                     py = ay + (by - ay) * progresso
                 end
 
-                -- Cores base
-                local r, g, b = 0.2, 0.4, 0.9
-                if u.faccao == 2 then r, g, b = 0.9, 0.2, 0.2 end
-                if u.jaAgiu then r, g, b = 0.5, 0.5, 0.5 end
-
-                -- SOMBREAMENTO E OPACIDADE (O segredo da profundidade do 1066)
-                -- Unidades ao fundo ficam mais escuras e transparentes
-                local sombra = 1 - (escala - 0.55) * 0.8  -- Quanto menor a escala, mais escuro
-                local alpha = 0.4 + (escala - 0.55) * 1.33 -- Fundo quase invisível, frente 100%
-
-                love.graphics.setColor(r * sombra, g * sombra, b * sombra, alpha)
+                local sombra = 1 - (escala - 0.55) * 0.8
+                local alpha = 0.4 + (escala - 0.55) * 1.33
                 
-                -- Desenha a unidade (quadrado)
-                love.graphics.rectangle("fill", px - tam/2, py - tam/2, tam, tam)
-
-                -- Contorno para ordens (com alpha)
-                if temOrdem(u) then
-                    love.graphics.setColor(0, 1, 1, alpha)
-                    love.graphics.rectangle("line", px - tam/2 - 4, py - tam/2 - 4, tam + 8, tam + 8)
+                if u.jaAgiu then
+                    sombra = sombra * 0.6
                 end
 
-                -- HP apenas nas unidades da frente ou com HP baixo
+                -- NOVO: Desenho do Sprite no lugar do quadrado
+                love.graphics.setColor(0.9 * sombra, 0.8 * sombra, 0.6 * sombra, alpha)
+                
+                local escalaX = (u.faccao == 1) and escala or -escala
+                local escalaY = escala
+                
+                -- Usa o quadro 'parado' por padrão
+                love.graphics.draw(spriteSheet, quads.parado, px, py, 0, escalaX, escalaY, 38, 38)
+
+                if temOrdem(u) then
+                    love.graphics.setColor(0, 1, 1, alpha)
+                    local tam = 44 * escala
+                    love.graphics.rectangle("line", px - tam/2, py - tam/2, tam, tam)
+                end
+
                 if escala > 0.8 or u.hp < 5 then
                     love.graphics.setColor(1, 1, 1, alpha)
-                    love.graphics.print(tostring(u.hp), px - tam/2 + 2, py - tam/2)
+                    love.graphics.print(tostring(u.hp), px - 16 * escala, py - 24 * escala)
                 end
             end
         end
@@ -379,11 +375,8 @@ local function desenharPainelSuperior()
         local px = ax + (bx - ax) * progresso
         local py = ay + (by - ay) * progresso
         
-        -- Projétil com rastro
         love.graphics.setColor(1, 1, 0, 0.8)
         love.graphics.circle("fill", px, py, 4)
-        love.graphics.setColor(1, 1, 0, 0.3)
-        love.graphics.circle("fill", px - (bx-ax)*0.05, py - (by-ay)*0.05, 2)
     end
 
     -- Terra subindo no cavar
@@ -396,7 +389,6 @@ local function desenharPainelSuperior()
         love.graphics.rectangle("fill", px - tam/2, py + tam/2 - tam * progresso, tam, tam * progresso)
     end
 
-    -- Texto de UI do painel
     love.graphics.setColor(1,1,1, 0.7)
     love.graphics.print("Painel de Batalha", 10, 10)
 end
@@ -439,7 +431,6 @@ function Jogo:draw()
         love.graphics.line(0, y*CELL, COLS*CELL, y*CELL)
     end
 
-    -- NOVO: trincheiras no grid inferior
     for cy, linha in pairs(trincheiras) do
         for cx, _ in pairs(linha) do
             love.graphics.setColor(0.4, 0.28, 0.12, 0.85)
@@ -482,6 +473,7 @@ function Jogo:draw()
 
     desenharRotas()
 
+    -- Grid inferior continua com quadrados
     for _, u in ipairs(unidades) do
         if u.hp > 0 then
             local cor = u.faccao == 1 and {0.2,0.4,0.9} or {0.9,0.2,0.2}
