@@ -1,3 +1,4 @@
+if os.getenv("LOVE2D_TOOLS") then pcall(require, "_love2d_tools_bridge") end
 local Jogo = require("src.estados.jogo")
 
 function love.load()
