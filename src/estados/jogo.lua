@@ -291,54 +291,85 @@ local function desenharTrincheirasSuperior()
 end
 
 local function desenharPainelSuperior()
-    love.graphics.setColor(0.55, 0.65, 0.75)
-    love.graphics.rectangle("fill", 0, 0, love.graphics.getWidth(), PAINEL_H)
-    love.graphics.setColor(0.35, 0.45, 0.30)
-    love.graphics.rectangle("fill", 0, PAINEL_H * 0.5, love.graphics.getWidth(), PAINEL_H * 0.5)
+    -- Céu com gradiente (amarelo/laranja do 1066)
+    love.graphics.setColor(0.9, 0.8, 0.5)
+    love.graphics.rectangle("fill", 0, 0, love.graphics.getWidth(), PAINEL_H * 0.6)
+    -- Chão (terra escura)
+    love.graphics.setColor(0.2, 0.15, 0.1)
+    love.graphics.rectangle("fill", 0, PAINEL_H * 0.6, love.graphics.getWidth(), PAINEL_H * 0.4)
 
-    for y = 1, ROWS do
-        local yTela = yTelaDaLinha(y)
-        local x1 = xTelaDaColuna(1, y)
-        local x2 = xTelaDaColuna(COLS, y)
-        love.graphics.setColor(1, 1, 1, 0.15)
-        love.graphics.line(x1, yTela, x2, yTela)
-    end
+    -- Árvores/silhuetas no fundo (apenas para dar ambientação, opcional)
+    love.graphics.setColor(0.1, 0.1, 0.1, 0.3)
+    love.graphics.circle("fill", 150, PAINEL_H * 0.5, 80) -- copa da árvore
+    love.graphics.rectangle("fill", 140, PAINEL_H * 0.5, 20, 100) -- tronco
 
-    -- NOVO: trincheiras desenhadas antes das unidades (ficam "no chão")
-    desenharTrincheirasSuperior()
-
-    for _, u in ipairs(unidades) do
-        if u.hp > 0 then
-            local px = xTelaDaColuna(u.x, u.y)
-            local py = yTelaDaLinha(u.y)
-            local tam = tamanhoNaLinha(u.y)
-
-            if cena and cena.tipo == "carga" and cena.atacante == u and cena.ordem then
-                local progresso = math.min(cena.t / cena.duracao, 1)
-                local o = cena.ordem
-                local ax = xTelaDaColuna(u.x, u.y)
-                local ay = yTelaDaLinha(u.y)
-                local bx = xTelaDaColuna(o.x, o.y)
-                local by = yTelaDaLinha(o.y)
-                px = ax + (bx - ax) * progresso
-                py = ay + (by - ay) * progresso
+    -- Desenha as trincheiras no terreno (do fundo para a frente)
+    for cy = 1, ROWS do
+        if trincheiras[cy] then
+            for cx, _ in pairs(trincheiras[cy]) do
+                local px = xTelaDaColuna(cx, cy)
+                local py = yTelaDaLinha(cy)
+                local tam = tamanhoNaLinha(cy)
+                
+                -- Trincheira com cor ajustada pela profundidade
+                love.graphics.setColor(0.3, 0.2, 0.1, escalaPorLinha(cy))
+                love.graphics.rectangle("fill", px - tam/2, py - tam/4, tam, tam/2)
             end
-
-            local cor = u.faccao == 1 and {0.2,0.4,0.9} or {0.9,0.2,0.2}
-            if u.jaAgiu then cor = {0.5,0.5,0.5} end
-            love.graphics.setColor(cor)
-            love.graphics.rectangle("fill", px - tam/2, py - tam/2, tam, tam)
-
-            if temOrdem(u) then
-                love.graphics.setColor(0, 1, 1)
-                love.graphics.rectangle("line", px - tam/2 - 6, py - tam/2 - 6, tam + 12, tam + 12)
-            end
-
-            love.graphics.setColor(1,1,1)
-            love.graphics.print(tostring(u.hp), px - tam/2 + 2, py - tam/2)
         end
     end
 
+    -- Desenha as unidades do FUNDO para a FRENTE (para sobreposição correta)
+    for cy = 1, ROWS do
+        for _, u in ipairs(unidades) do
+            if u.hp > 0 and u.y == cy then
+                local px = xTelaDaColuna(u.x, u.y)
+                local py = yTelaDaLinha(u.y)
+                local tam = tamanhoNaLinha(u.y)
+                local escala = escalaPorLinha(u.y)
+
+                -- Animação de carga
+                if cena and cena.tipo == "carga" and cena.atacante == u and cena.ordem then
+                    local progresso = math.min(cena.t / cena.duracao, 1)
+                    local o = cena.ordem
+                    local ax = xTelaDaColuna(u.x, u.y)
+                    local ay = yTelaDaLinha(u.y)
+                    local bx = xTelaDaColuna(o.x, o.y)
+                    local by = yTelaDaLinha(o.y)
+                    px = ax + (bx - ax) * progresso
+                    py = ay + (by - ay) * progresso
+                end
+
+                -- Cores base
+                local r, g, b = 0.2, 0.4, 0.9
+                if u.faccao == 2 then r, g, b = 0.9, 0.2, 0.2 end
+                if u.jaAgiu then r, g, b = 0.5, 0.5, 0.5 end
+
+                -- SOMBREAMENTO E OPACIDADE (O segredo da profundidade do 1066)
+                -- Unidades ao fundo ficam mais escuras e transparentes
+                local sombra = 1 - (escala - 0.55) * 0.8  -- Quanto menor a escala, mais escuro
+                local alpha = 0.4 + (escala - 0.55) * 1.33 -- Fundo quase invisível, frente 100%
+
+                love.graphics.setColor(r * sombra, g * sombra, b * sombra, alpha)
+                
+                -- Desenha a unidade (quadrado)
+                love.graphics.rectangle("fill", px - tam/2, py - tam/2, tam, tam)
+
+                -- Contorno para ordens (com alpha)
+                if temOrdem(u) then
+                    love.graphics.setColor(0, 1, 1, alpha)
+                    love.graphics.rectangle("line", px - tam/2 - 4, py - tam/2 - 4, tam + 8, tam + 8)
+                end
+
+                -- HP apenas nas unidades da frente ou com HP baixo
+                if escala > 0.8 or u.hp < 5 then
+                    love.graphics.setColor(1, 1, 1, alpha)
+                    love.graphics.print(tostring(u.hp), px - tam/2 + 2, py - tam/2)
+                end
+            end
+        end
+    end
+
+    -- Projétil de tiro
     if cena and cena.tipo == "tiro" and cena.atacante and cena.alvo then
         local progresso = math.min(cena.t / cena.duracao, 1)
         local ax = xTelaDaColuna(cena.atacante.x, cena.atacante.y)
@@ -347,10 +378,15 @@ local function desenharPainelSuperior()
         local by = yTelaDaLinha(cena.alvo.y)
         local px = ax + (bx - ax) * progresso
         local py = ay + (by - ay) * progresso
-        love.graphics.setColor(1,1,0)
-        love.graphics.circle("fill", px, py, 6)
+        
+        -- Projétil com rastro
+        love.graphics.setColor(1, 1, 0, 0.8)
+        love.graphics.circle("fill", px, py, 4)
+        love.graphics.setColor(1, 1, 0, 0.3)
+        love.graphics.circle("fill", px - (bx-ax)*0.05, py - (by-ay)*0.05, 2)
     end
 
+    -- Terra subindo no cavar
     if cena and cena.tipo == "cavar" and cena.atacante then
         local progresso = math.min(cena.t / cena.duracao, 1)
         local px = xTelaDaColuna(cena.atacante.x, cena.atacante.y)
@@ -360,8 +396,9 @@ local function desenharPainelSuperior()
         love.graphics.rectangle("fill", px - tam/2, py + tam/2 - tam * progresso, tam, tam * progresso)
     end
 
-    love.graphics.setColor(1,1,1)
-    love.graphics.print("Painel superior (perspectiva)", 10, 10)
+    -- Texto de UI do painel
+    love.graphics.setColor(1,1,1, 0.7)
+    love.graphics.print("Painel de Batalha", 10, 10)
 end
 
 local function desenharRotas()
