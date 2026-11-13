@@ -28,9 +28,10 @@ local resolvendo = false
 local filaResolucao = {}
 local indiceResolucao = 0
 
--- NOVO: Variáveis para o Sprite
+-- Variáveis para o Sprite
 local spriteSheet
 local quads = {}
+local W_SPRITE, H_SPRITE
 
 -- ========== PROJEÇÃO ==========
 local function escalaPorLinha(y)
@@ -153,14 +154,49 @@ function Jogo:load()
     filaResolucao = {}
     indiceResolucao = 0
 
-    -- NOVO: Carrega a imagem e define os quadros
-    -- Certifique-se de que a pasta 'assets' e a imagem 'infantaria.png' existam!
-    spriteSheet = love.graphics.newImage("assets/imagens/infantariaalema.jpg")
-    local w, h = 76, 76 -- Tamanho estimado de cada sprite
+    -- Carrega a nova imagem
+    spriteSheet = love.graphics.newImage("assets/imagens/GerSoldadoVer6.png")
     local imgW, imgH = spriteSheet:getDimensions()
     
-    quads.parado = love.graphics.newQuad(5, 0, w, h, imgW, imgH)
-    quads.andando = love.graphics.newQuad(w, h, w, h, imgW, imgH) -- Ajuste as coordenadas conforme a imagem real
+    -- ========== MAPEAMENTO EXATO DOS QUADROS ==========
+    -- Olhando a imagem, temos margens e espaços. 
+    -- A área do soldado começa mais ou menos no X=130 e Y=15.
+    
+    local startX = 130    -- Onde o primeiro soldado começa (ignorando o texto "CAMINHADA")
+    local startY = 15     -- Onde o topo do capacete começa
+    
+    local stepX = 144     -- A distância horizontal de um soldado para o outro
+    local stepY = 192     -- A distância vertical de uma linha para a outra
+    
+    local w = 120         -- A largura de cada recorte (para pegar o soldado inteiro sem o texto do lado)
+    local h = 160         -- A altura de cada recorte (para não pegar a etiqueta de número embaixo)
+
+    quads.andar = {}
+    quads.tiro = {}
+    
+    -- Primeira linha (Caminhada) - 8 quadros
+    for i = 0, 7 do
+        local x = startX + (i * stepX)
+        local y = startY
+        quads.andar[i + 1] = love.graphics.newQuad(x, y, w, h, imgW, imgH)
+    end
+    
+    -- Terceira linha (Tiro) - 8 quadros
+    for i = 0, 7 do
+        local x = startX + (i * stepX)
+        local y = startY + (2 * stepY) -- Pula 2 linhas para baixo
+        quads.tiro[i + 1] = love.graphics.newQuad(x, y, w, h, imgW, imgH)
+    end
+    
+    -- Quadro parado (Vamos usar o quadro 8 da segunda linha - "Prepara/Aponta")
+    -- Posição: coluna 7 (i=7), linha 1 (Y)
+    local xParado = startX + (7 * stepX)
+    local yParado = startY + (1 * stepY)
+    quads.parado = love.graphics.newQuad(xParado, yParado, w, h, imgW, imgH)
+
+    -- Salva o tamanho do quadro para usar no desenho (centralizar)
+    W_SPRITE = w
+    H_SPRITE = h
 
     for i = 1, 3 do
         table.insert(unidades, {
@@ -168,12 +204,14 @@ function Jogo:load()
             movimentoMax = MOVIMENTO_PADRAO,
             movimentoRestante = MOVIMENTO_PADRAO,
             ordem = nil,
+            animTimer = 0
         })
         table.insert(unidades, {
             x=COLS, y=i+1, hp=10, faccao=2, jaAgiu=false,
             movimentoMax = MOVIMENTO_PADRAO,
             movimentoRestante = MOVIMENTO_PADRAO,
             ordem = nil,
+            animTimer = 0
         })
     end
 end
@@ -250,7 +288,10 @@ local function avancarResolucao()
     if u.ordem then
         local tipo = u.ordem.tipo
         local alvo = u.ordem.alvo
-        cena = {tipo=tipo, atacante=u, alvo=alvo, t=0, duracao=0.6, ordem=u.ordem}
+        -- Aumentei a duração da cena de tiro para a animação de 8 quadros rodar bem
+        local duracao = 0.8 
+        if tipo == "cavar" then duracao = 0.6 end
+        cena = {tipo=tipo, atacante=u, alvo=alvo, t=0, duracao=duracao, ordem=u.ordem}
     else
         aplicarOrdem(u, u.ordem)
     end
@@ -258,6 +299,10 @@ end
 
 function Jogo:update(dt)
     if vencedor then return end
+
+    for _, u in ipairs(unidades) do
+        u.animTimer = u.animTimer + dt
+    end
 
     if resolvendo then
         if cena then
@@ -302,21 +347,17 @@ local function desenharTrincheirasSuperior()
 end
 
 local function desenharPainelSuperior()
-    -- Céu com gradiente (amarelo/laranja)
     love.graphics.setColor(0.9, 0.8, 0.5)
     love.graphics.rectangle("fill", 0, 0, love.graphics.getWidth(), PAINEL_H * 0.6)
-    -- Chão (terra escura)
     love.graphics.setColor(0.2, 0.15, 0.1)
     love.graphics.rectangle("fill", 0, PAINEL_H * 0.6, love.graphics.getWidth(), PAINEL_H * 0.4)
 
-    -- Árvores/silhuetas no fundo
     love.graphics.setColor(0.1, 0.1, 0.1, 0.3)
     love.graphics.circle("fill", 150, PAINEL_H * 0.5, 80)
     love.graphics.rectangle("fill", 140, PAINEL_H * 0.5, 20, 100)
 
     desenharTrincheirasSuperior()
 
-    -- Desenha as unidades do FUNDO para a FRENTE
     for cy = 1, ROWS do
         for _, u in ipairs(unidades) do
             if u.hp > 0 and u.y == cy then
@@ -338,18 +379,38 @@ local function desenharPainelSuperior()
                 local sombra = 1 - (escala - 0.55) * 0.8
                 local alpha = 0.4 + (escala - 0.55) * 1.33
                 
-                if u.jaAgiu then
+                if u.jaAgiu and not cena then
                     sombra = sombra * 0.6
                 end
 
-                -- NOVO: Desenho do Sprite no lugar do quadrado
                 love.graphics.setColor(0.9 * sombra, 0.8 * sombra, 0.6 * sombra, alpha)
                 
                 local escalaX = (u.faccao == 1) and escala or -escala
                 local escalaY = escala
                 
-                -- Usa o quadro 'parado' por padrão
-                love.graphics.draw(spriteSheet, quads.parado, px, py, 0, escalaX, escalaY, 38, 38)
+                local quadroAtual = quads.parado
+                
+                -- Lógica de Animação baseada no que está acontecendo
+                if cena and cena.atacante == u then
+                    if cena.tipo == "tiro" then
+                        -- Animação de Tiro (divide a duração da cena pelos 8 quadros)
+                        local tempoPorQuadro = cena.duracao / 8
+                        local frame = math.floor(cena.t / tempoPorQuadro) + 1
+                        if frame > 8 then frame = 8 end
+                        quadroAtual = quads.tiro[frame]
+                    elseif cena.tipo == "carga" then
+                        -- Animação de Corrida (mais rápida durante a carga)
+                        local frame = math.floor(u.animTimer / 0.08) % 8
+                        quadroAtual = quads.andar[frame + 1]
+                    end
+                elseif u.ordem and u.ordem.tipo == "mover" then
+                    -- Animação de Caminhada normal (antes de apertar espaço, se quiser mostrar)
+                    local frame = math.floor(u.animTimer / 0.12) % 8
+                    quadroAtual = quads.andar[frame + 1]
+                end
+                
+                -- Desenha o sprite
+                love.graphics.draw(spriteSheet, quadroAtual, px, py, 0, escalaX, escalaY, W_SPRITE / 2, H_SPRITE / 2)
 
                 if temOrdem(u) then
                     love.graphics.setColor(0, 1, 1, alpha)
@@ -367,16 +428,19 @@ local function desenharPainelSuperior()
 
     -- Projétil de tiro
     if cena and cena.tipo == "tiro" and cena.atacante and cena.alvo then
-        local progresso = math.min(cena.t / cena.duracao, 1)
-        local ax = xTelaDaColuna(cena.atacante.x, cena.atacante.y)
-        local ay = yTelaDaLinha(cena.atacante.y)
-        local bx = xTelaDaColuna(cena.alvo.x, cena.alvo.y)
-        local by = yTelaDaLinha(cena.alvo.y)
-        local px = ax + (bx - ax) * progresso
-        local py = ay + (by - ay) * progresso
-        
-        love.graphics.setColor(1, 1, 0, 0.8)
-        love.graphics.circle("fill", px, py, 4)
+        -- O projétil só aparece na metade da animação (quando o tiro sai)
+        if cena.t > cena.duracao * 0.25 and cena.t < cena.duracao * 0.75 then
+            local progresso = (cena.t - cena.duracao * 0.25) / (cena.duracao * 0.5)
+            local ax = xTelaDaColuna(cena.atacante.x, cena.atacante.y)
+            local ay = yTelaDaLinha(cena.atacante.y)
+            local bx = xTelaDaColuna(cena.alvo.x, cena.alvo.y)
+            local by = yTelaDaLinha(cena.alvo.y)
+            local px = ax + (bx - ax) * progresso
+            local py = ay + (by - ay) * progresso
+            
+            love.graphics.setColor(1, 0.8, 0, 0.9)
+            love.graphics.circle("fill", px, py, 4)
+        end
     end
 
     -- Terra subindo no cavar
