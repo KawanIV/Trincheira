@@ -32,6 +32,10 @@ local indiceResolucao = 0
 local spriteSheet
 local quads = {}
 local W_SPRITE, H_SPRITE
+local cenario
+
+-- linhas de grid
+local mostrarGridDebug = false
 
 -- ========== PROJEÇÃO ==========
 local function escalaPorLinha(y)
@@ -41,8 +45,8 @@ local function escalaPorLinha(y)
 end
 
 local function yTelaDaLinha(y)
-    local margemTopo = PAINEL_H * 0.12
-    local margemBase = PAINEL_H * 0.92
+    local margemTopo = PAINEL_H * 0.35
+    local margemBase = PAINEL_H * 0.85
     local t = (y - 1) / math.max(ROWS - 1, 1)
     return margemTopo + (margemBase - margemTopo) * t
 end
@@ -154,49 +158,55 @@ function Jogo:load()
     filaResolucao = {}
     indiceResolucao = 0
 
-    -- Carrega a nova imagem
-    spriteSheet = love.graphics.newImage("assets/imagens/GerSoldadoVer6.png")
-    local imgW, imgH = spriteSheet:getDimensions()
-    
-    -- ========== MAPEAMENTO EXATO DOS QUADROS ==========
-    -- Olhando a imagem, temos margens e espaços. 
-    -- A área do soldado começa mais ou menos no X=130 e Y=15.
-    
-    local startX = 130    -- Onde o primeiro soldado começa (ignorando o texto "CAMINHADA")
-    local startY = 15     -- Onde o topo do capacete começa
-    
-    local stepX = 144     -- A distância horizontal de um soldado para o outro
-    local stepY = 192     -- A distância vertical de uma linha para a outra
-    
-    local w = 120         -- A largura de cada recorte (para pegar o soldado inteiro sem o texto do lado)
-    local h = 160         -- A altura de cada recorte (para não pegar a etiqueta de número embaixo)
+    -- Carrega o cenário (mantido)
+    cenario = love.graphics.newImage("assets/imagens/cenario.png")
 
-    quads.andar = {}
-    quads.tiro = {}
-    
-    -- Primeira linha (Caminhada) - 8 quadros
-    for i = 0, 7 do
-        local x = startX + (i * stepX)
-        local y = startY
-        quads.andar[i + 1] = love.graphics.newQuad(x, y, w, h, imgW, imgH)
-    end
-    
-    -- Terceira linha (Tiro) - 8 quadros
-    for i = 0, 7 do
-        local x = startX + (i * stepX)
-        local y = startY + (2 * stepY) -- Pula 2 linhas para baixo
-        quads.tiro[i + 1] = love.graphics.newQuad(x, y, w, h, imgW, imgH)
-    end
-    
-    -- Quadro parado (Vamos usar o quadro 8 da segunda linha - "Prepara/Aponta")
-    -- Posição: coluna 7 (i=7), linha 1 (Y)
-    local xParado = startX + (7 * stepX)
-    local yParado = startY + (1 * stepY)
-    quads.parado = love.graphics.newQuad(xParado, yParado, w, h, imgW, imgH)
+    -- Tenta carregar o sprite dos soldados. Se não achar, usa quadrados.
+    local sucesso, resultado = pcall(love.graphics.newImage, "assets/imagens/GerSoldadoVer6.png")
 
-    -- Salva o tamanho do quadro para usar no desenho (centralizar)
-    W_SPRITE = w
-    H_SPRITE = h
+    if sucesso then
+        spriteSheet = resultado
+        local imgW, imgH = spriteSheet:getDimensions()
+
+        -- ========== MAPEAMENTO EXATO DOS QUADROS ==========
+        local startX = 130
+        local startY = 15
+        local stepX = 144
+        local stepY = 192
+        local w = 120
+        local h = 160
+
+        quads.andar = {}
+        quads.tiro = {}
+
+        -- Primeira linha (Caminhada) - 8 quadros
+        for i = 0, 7 do
+            local x = startX + (i * stepX)
+            local y = startY
+            quads.andar[i + 1] = love.graphics.newQuad(x, y, w, h, imgW, imgH)
+        end
+
+        -- Terceira linha (Tiro) - 8 quadros
+        for i = 0, 7 do
+            local x = startX + (i * stepX)
+            local y = startY + (2 * stepY)
+            quads.tiro[i + 1] = love.graphics.newQuad(x, y, w, h, imgW, imgH)
+        end
+
+        -- Quadro parado
+        local xParado = startX + (7 * stepX)
+        local yParado = startY + (1 * stepY)
+        quads.parado = love.graphics.newQuad(xParado, yParado, w, h, imgW, imgH)
+
+        W_SPRITE = w
+        H_SPRITE = h
+    else
+        print("Aviso: SpriteSheet nao encontrado. Usando quadrados como fallback.")
+        spriteSheet = nil
+        quads = {}
+        W_SPRITE = 0
+        H_SPRITE = 0
+    end
 
     for i = 1, 3 do
         table.insert(unidades, {
@@ -288,8 +298,7 @@ local function avancarResolucao()
     if u.ordem then
         local tipo = u.ordem.tipo
         local alvo = u.ordem.alvo
-        -- Aumentei a duração da cena de tiro para a animação de 8 quadros rodar bem
-        local duracao = 0.8 
+        local duracao = 0.8
         if tipo == "cavar" then duracao = 0.6 end
         cena = {tipo=tipo, atacante=u, alvo=alvo, t=0, duracao=duracao, ordem=u.ordem}
     else
@@ -346,12 +355,53 @@ local function desenharTrincheirasSuperior()
     end
 end
 
-local function desenharPainelSuperior()
-    love.graphics.setColor(0.9, 0.8, 0.5)
-    love.graphics.rectangle("fill", 0, 0, love.graphics.getWidth(), PAINEL_H * 0.6)
-    love.graphics.setColor(0.2, 0.15, 0.1)
-    love.graphics.rectangle("fill", 0, PAINEL_H * 0.6, love.graphics.getWidth(), PAINEL_H * 0.4)
+local function desenharGridDebug()
+    if not mostrarGridDebug then return end
+    
+    -- Desenha as linhas verticais (colunas)
+    love.graphics.setColor(1, 0, 0, 0.5) -- Vermelho semi-transparente
+    for cx = 1, COLS do
+        local px = xTelaDaColuna(cx, 1) -- Pega a posição X base
+        -- Como a perspectiva muda a posição X dependendo da linha, 
+        -- vamos desenhar um ponto em cada interseção
+        for cy = 1, ROWS do
+            local pX = xTelaDaColuna(cx, cy)
+            local pY = yTelaDaLinha(cy)
+            love.graphics.circle("fill", pX, pY, 4)
+        end
+    end
+    
+    -- Desenha as linhas horizontais (linhas)
+    for cy = 1, ROWS do
+        love.graphics.setColor(0, 1, 0, 0.5) -- Verde semi-transparente
+        local pY = yTelaDaLinha(cy)
+        love.graphics.line(0, pY, love.graphics.getWidth(), pY)
+        
+        -- Escreve o número da linha ao lado
+        love.graphics.setColor(1, 1, 1, 0.8)
+        love.graphics.print("Linha " .. cy, 5, pY - 15)
+    end
+    
+    -- Desenha os pontos exatos onde cada célula fica
+    love.graphics.setColor(1, 1, 0, 0.8) -- Amarelo
+    for cy = 1, ROWS do
+        for cx = 1, COLS do
+            local pX = xTelaDaColuna(cx, cy)
+            local pY = yTelaDaLinha(cy)
+            love.graphics.circle("line", pX, pY, 2)
+        end
+    end
+end
 
+local function desenharPainelSuperior()
+    -- Desenha o cenário no fundo do painel superior
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.draw(cenario, 0, 0, 0,
+        love.graphics.getWidth() / cenario:getWidth(),
+        PAINEL_H / cenario:getHeight()
+    )
+
+    -- Sombra/cratera no canto esquerdo (mantido)
     love.graphics.setColor(0.1, 0.1, 0.1, 0.3)
     love.graphics.circle("fill", 150, PAINEL_H * 0.5, 80)
     love.graphics.rectangle("fill", 140, PAINEL_H * 0.5, 20, 100)
@@ -378,39 +428,49 @@ local function desenharPainelSuperior()
 
                 local sombra = 1 - (escala - 0.55) * 0.8
                 local alpha = 0.4 + (escala - 0.55) * 1.33
-                
+
                 if u.jaAgiu and not cena then
                     sombra = sombra * 0.6
                 end
 
                 love.graphics.setColor(0.9 * sombra, 0.8 * sombra, 0.6 * sombra, alpha)
-                
-                local escalaX = (u.faccao == 1) and escala or -escala
-                local escalaY = escala
-                
-                local quadroAtual = quads.parado
-                
-                -- Lógica de Animação baseada no que está acontecendo
-                if cena and cena.atacante == u then
-                    if cena.tipo == "tiro" then
-                        -- Animação de Tiro (divide a duração da cena pelos 8 quadros)
-                        local tempoPorQuadro = cena.duracao / 8
-                        local frame = math.floor(cena.t / tempoPorQuadro) + 1
-                        if frame > 8 then frame = 8 end
-                        quadroAtual = quads.tiro[frame]
-                    elseif cena.tipo == "carga" then
-                        -- Animação de Corrida (mais rápida durante a carga)
-                        local frame = math.floor(u.animTimer / 0.08) % 8
+
+                if spriteSheet then
+                    local escalaX = (u.faccao == 1) and escala or -escala
+                    local escalaY = escala
+
+                    local quadroAtual = quads.parado
+
+                    -- Lógica de Animação
+                    if cena and cena.atacante == u then
+                        if cena.tipo == "tiro" then
+                            local tempoPorQuadro = cena.duracao / 8
+                            local frame = math.floor(cena.t / tempoPorQuadro) + 1
+                            if frame > 8 then frame = 8 end
+                            quadroAtual = quads.tiro[frame]
+                        elseif cena.tipo == "carga" then
+                            local frame = math.floor(u.animTimer / 0.08) % 8
+                            quadroAtual = quads.andar[frame + 1]
+                        end
+                    elseif u.ordem and u.ordem.tipo == "mover" then
+                        local frame = math.floor(u.animTimer / 0.12) % 8
                         quadroAtual = quads.andar[frame + 1]
                     end
-                elseif u.ordem and u.ordem.tipo == "mover" then
-                    -- Animação de Caminhada normal (antes de apertar espaço, se quiser mostrar)
-                    local frame = math.floor(u.animTimer / 0.12) % 8
-                    quadroAtual = quads.andar[frame + 1]
+
+                    love.graphics.draw(spriteSheet, quadroAtual, px, py, 0, escalaX, escalaY, W_SPRITE / 2, H_SPRITE / 2)
+                else
+                    -- FALLBACK: quadrado colorido
+                    local tamanhoQuadrado = 44 * escala
+                    if u.faccao == 1 then
+                        love.graphics.setColor(0.2, 0.4, 0.9, alpha)
+                    else
+                        love.graphics.setColor(0.9, 0.2, 0.2, alpha)
+                    end
+                    love.graphics.rectangle("fill", px - tamanhoQuadrado/2, py - tamanhoQuadrado/2, tamanhoQuadrado, tamanhoQuadrado)
+
+                    love.graphics.setColor(0, 0, 0, alpha)
+                    love.graphics.rectangle("line", px - tamanhoQuadrado/2, py - tamanhoQuadrado/2, tamanhoQuadrado, tamanhoQuadrado)
                 end
-                
-                -- Desenha o sprite
-                love.graphics.draw(spriteSheet, quadroAtual, px, py, 0, escalaX, escalaY, W_SPRITE / 2, H_SPRITE / 2)
 
                 if temOrdem(u) then
                     love.graphics.setColor(0, 1, 1, alpha)
@@ -428,7 +488,6 @@ local function desenharPainelSuperior()
 
     -- Projétil de tiro
     if cena and cena.tipo == "tiro" and cena.atacante and cena.alvo then
-        -- O projétil só aparece na metade da animação (quando o tiro sai)
         if cena.t > cena.duracao * 0.25 and cena.t < cena.duracao * 0.75 then
             local progresso = (cena.t - cena.duracao * 0.25) / (cena.duracao * 0.5)
             local ax = xTelaDaColuna(cena.atacante.x, cena.atacante.y)
@@ -437,7 +496,7 @@ local function desenharPainelSuperior()
             local by = yTelaDaLinha(cena.alvo.y)
             local px = ax + (bx - ax) * progresso
             local py = ay + (by - ay) * progresso
-            
+
             love.graphics.setColor(1, 0.8, 0, 0.9)
             love.graphics.circle("fill", px, py, 4)
         end
@@ -455,6 +514,8 @@ local function desenharPainelSuperior()
 
     love.graphics.setColor(1,1,1, 0.7)
     love.graphics.print("Painel de Batalha", 10, 10)
+    -- Carrega linha do grid
+    desenharGridDebug() 
 end
 
 local function desenharRotas()
@@ -671,6 +732,10 @@ function Jogo:keypressed(tecla)
         modoMover = false
         modoCarga = false
         selecionada = nil
+        return
+    end
+    if tecla == "f1" then
+        mostrarGridDebug = not mostrarGridDebug
         return
     end
     if tecla == "space" and not vencedor and not cena and not resolvendo
