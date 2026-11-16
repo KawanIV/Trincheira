@@ -28,13 +28,16 @@ local resolvendo = false
 local filaResolucao = {}
 local indiceResolucao = 0
 
--- Variáveis para o Sprite
+-- Variáveis para o Sprite e Cenário
 local spriteSheet
 local quads = {}
 local W_SPRITE, H_SPRITE
-local cenario
 
--- linhas de grid
+local fundoCeu
+local tileTerra
+local tileTrincheira
+local tileDetalhe
+
 local mostrarGridDebug = false
 
 -- ========== PROJEÇÃO ==========
@@ -45,8 +48,9 @@ local function escalaPorLinha(y)
 end
 
 local function yTelaDaLinha(y)
-    local margemTopo = PAINEL_H * 0.35
-    local margemBase = PAINEL_H * 0.85
+    -- Margens ajustadas para o chão começar na parte de baixo do cenário
+    local margemTopo = PAINEL_H * 0.45 
+    local margemBase = PAINEL_H * 0.95 
     local t = (y - 1) / math.max(ROWS - 1, 1)
     return margemTopo + (margemBase - margemTopo) * t
 end
@@ -115,9 +119,10 @@ end
 
 local function calcularBotoesMenu(u)
     botoesMenu = {}
-    local cx = (u.x - 1) * CELL + CELL/2
-    local cy = (u.y - 1) * CELL + CELL/2 + GRID_OFFSET_Y
-    local off = CELL * 0.9
+    -- Posiciona o menu radial na visão de perspectiva (topo)
+    local cx = xTelaDaColuna(u.x, u.y)
+    local cy = yTelaDaLinha(u.y)
+    local off = 50 * escalaPorLinha(u.y)
 
     local candidatos = {
         {id="mover", label="Mover", dx=0,  dy=-1, sempre=true},
@@ -158,17 +163,47 @@ function Jogo:load()
     filaResolucao = {}
     indiceResolucao = 0
 
-    -- Carrega o cenário (mantido)
-    cenario = love.graphics.newImage("assets/imagens/cenario.png")
+    -- Carrega o cenário de fundo (que servirá como céu)
+    local sFundo, imgFundo = pcall(love.graphics.newImage, "assets/imagens/cenario.png")
+    if sFundo then 
+        fundoCeu = imgFundo 
+    else
+        print("Aviso: cenario.png não encontrado.")
+    end
 
-    -- Tenta carregar o sprite dos soldados. Se não achar, usa quadrados.
+    -- Carrega os novos tiles
+    local sTerra, imgTerra = pcall(love.graphics.newImage, "assets/imagens/tile_terra.png")
+    if sTerra then 
+        tileTerra = imgTerra
+        tileTerra:setFilter("nearest", "nearest") 
+    else
+        print("Aviso: tile_terra.png não encontrado.")
+    end
+
+    local sTrincheira, imgTrincheira = pcall(love.graphics.newImage, "assets/imagens/tile_trincheira.png")
+    if sTrincheira then 
+        tileTrincheira = imgTrincheira
+        tileTrincheira:setFilter("nearest", "nearest") 
+    else
+        print("Aviso: tile_trincheira.png não encontrado.")
+    end
+
+    local sDetalhe, imgDetalhe = pcall(love.graphics.newImage, "assets/imagens/tile_detalhe.png")
+    if sDetalhe then 
+        tileDetalhe = imgDetalhe
+        tileDetalhe:setFilter("nearest", "nearest") 
+    else
+        print("Aviso: tile_detalhe.png não encontrado.")
+    end
+
+    -- Tenta carregar o sprite dos soldados
     local sucesso, resultado = pcall(love.graphics.newImage, "assets/imagens/GerSoldadoVer6.png")
 
     if sucesso then
         spriteSheet = resultado
+        spriteSheet:setFilter("nearest", "nearest")
         local imgW, imgH = spriteSheet:getDimensions()
 
-        -- ========== MAPEAMENTO EXATO DOS QUADROS ==========
         local startX = 130
         local startY = 15
         local stepX = 144
@@ -179,21 +214,18 @@ function Jogo:load()
         quads.andar = {}
         quads.tiro = {}
 
-        -- Primeira linha (Caminhada) - 8 quadros
         for i = 0, 7 do
             local x = startX + (i * stepX)
             local y = startY
             quads.andar[i + 1] = love.graphics.newQuad(x, y, w, h, imgW, imgH)
         end
 
-        -- Terceira linha (Tiro) - 8 quadros
         for i = 0, 7 do
             local x = startX + (i * stepX)
             local y = startY + (2 * stepY)
             quads.tiro[i + 1] = love.graphics.newQuad(x, y, w, h, imgW, imgH)
         end
 
-        -- Quadro parado
         local xParado = startX + (7 * stepX)
         local yParado = startY + (1 * stepY)
         quads.parado = love.graphics.newQuad(xParado, yParado, w, h, imgW, imgH)
@@ -201,7 +233,7 @@ function Jogo:load()
         W_SPRITE = w
         H_SPRITE = h
     else
-        print("Aviso: SpriteSheet nao encontrado. Usando quadrados como fallback.")
+        print("Aviso: SpriteSheet não encontrado. Usando quadrados como fallback.")
         spriteSheet = nil
         quads = {}
         W_SPRITE = 0
@@ -341,29 +373,11 @@ function Jogo:update(dt)
 end
 
 -- ========== DESENHO ==========
-local function desenharTrincheirasSuperior()
-    for cy, linha in pairs(trincheiras) do
-        for cx, _ in pairs(linha) do
-            local px = xTelaDaColuna(cx, cy)
-            local py = yTelaDaLinha(cy)
-            local tam = tamanhoNaLinha(cy)
-            love.graphics.setColor(0.4, 0.28, 0.12, 0.85)
-            love.graphics.rectangle("fill", px - tam/2, py - tam/2, tam, tam)
-            love.graphics.setColor(0.5, 0.35, 0.15)
-            love.graphics.rectangle("line", px - tam/2, py - tam/2, tam, tam)
-        end
-    end
-end
-
 local function desenharGridDebug()
     if not mostrarGridDebug then return end
     
-    -- Desenha as linhas verticais (colunas)
-    love.graphics.setColor(1, 0, 0, 0.5) -- Vermelho semi-transparente
+    love.graphics.setColor(1, 0, 0, 0.5)
     for cx = 1, COLS do
-        local px = xTelaDaColuna(cx, 1) -- Pega a posição X base
-        -- Como a perspectiva muda a posição X dependendo da linha, 
-        -- vamos desenhar um ponto em cada interseção
         for cy = 1, ROWS do
             local pX = xTelaDaColuna(cx, cy)
             local pY = yTelaDaLinha(cy)
@@ -371,43 +385,58 @@ local function desenharGridDebug()
         end
     end
     
-    -- Desenha as linhas horizontais (linhas)
     for cy = 1, ROWS do
-        love.graphics.setColor(0, 1, 0, 0.5) -- Verde semi-transparente
+        love.graphics.setColor(0, 1, 0, 0.5)
         local pY = yTelaDaLinha(cy)
         love.graphics.line(0, pY, love.graphics.getWidth(), pY)
         
-        -- Escreve o número da linha ao lado
         love.graphics.setColor(1, 1, 1, 0.8)
         love.graphics.print("Linha " .. cy, 5, pY - 15)
-    end
-    
-    -- Desenha os pontos exatos onde cada célula fica
-    love.graphics.setColor(1, 1, 0, 0.8) -- Amarelo
-    for cy = 1, ROWS do
-        for cx = 1, COLS do
-            local pX = xTelaDaColuna(cx, cy)
-            local pY = yTelaDaLinha(cy)
-            love.graphics.circle("line", pX, pY, 2)
-        end
     end
 end
 
 local function desenharPainelSuperior()
-    -- Desenha o cenário no fundo do painel superior
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.draw(cenario, 0, 0, 0,
-        love.graphics.getWidth() / cenario:getWidth(),
-        PAINEL_H / cenario:getHeight()
-    )
+    -- ========== CAMADA 0: CÉU LIMPO (SEM IMAGEM) ==========
+    -- Desenha um gradiente simples de céu de guerra (laranja/amarelo)
+    love.graphics.setColor(0.9, 0.6, 0.3)
+    love.graphics.rectangle("fill", 0, 0, love.graphics.getWidth(), PAINEL_H * 0.4)
+    love.graphics.setColor(0.5, 0.35, 0.2)
+    love.graphics.rectangle("fill", 0, PAINEL_H * 0.4, love.graphics.getWidth(), PAINEL_H * 0.6)
 
-    -- Sombra/cratera no canto esquerdo (mantido)
-    love.graphics.setColor(0.1, 0.1, 0.1, 0.3)
-    love.graphics.circle("fill", 150, PAINEL_H * 0.5, 80)
-    love.graphics.rectangle("fill", 140, PAINEL_H * 0.5, 20, 100)
+    -- ========== CAMADA 1 e 2: CHÃO (TILEMAP) ==========
+    for cy = 1, ROWS do
+        for cx = 1, COLS do
+            local px = xTelaDaColuna(cx, cy)
+            local py = yTelaDaLinha(cy)
+            local tam = tamanhoNaLinha(cy) 
 
-    desenharTrincheirasSuperior()
+            -- Desenha o chão
+            if tileTerra then
+                love.graphics.setColor(1, 1, 1, 1)
+                -- Aumentamos a escala para 1.3 para os tiles se sobreporem e não deixarem buracos pretos
+                love.graphics.draw(tileTerra, px, py, 0,
+                    (tam * 1.3) / tileTerra:getWidth(), 
+                    (tam * 1.3) / tileTerra:getHeight(),
+                    tileTerra:getWidth() / 2,
+                    tileTerra:getHeight() / 2)
+            else
+                love.graphics.setColor(0.4, 0.3, 0.2)
+                love.graphics.rectangle("fill", px - tam/2, py - tam/2, tam, tam)
+            end
 
+            -- Desenha a Trincheira por cima (SÓ SE TIVER CAVADO)
+            if temTrincheira(cx, cy) and tileTrincheira then
+                love.graphics.setColor(1, 1, 1, 1)
+                love.graphics.draw(tileTrincheira, px, py, 0,
+                    (tam * 1.4) / tileTrincheira:getWidth(), 
+                    (tam * 1.4) / tileTrincheira:getHeight(),
+                    tileTrincheira:getWidth() / 2,
+                    tileTrincheira:getHeight() / 2)
+            end
+        end
+    end
+
+    -- ========== CAMADA 3: SOLDADOS, PROJÉTEIS, EFEITOS ==========
     for cy = 1, ROWS do
         for _, u in ipairs(unidades) do
             if u.hp > 0 and u.y == cy then
@@ -415,6 +444,7 @@ local function desenharPainelSuperior()
                 local py = yTelaDaLinha(u.y)
                 local escala = escalaPorLinha(u.y)
 
+                -- Animação de Carga
                 if cena and cena.tipo == "carga" and cena.atacante == u and cena.ordem then
                     local progresso = math.min(cena.t / cena.duracao, 1)
                     local o = cena.ordem
@@ -428,20 +458,15 @@ local function desenharPainelSuperior()
 
                 local sombra = 1 - (escala - 0.55) * 0.8
                 local alpha = 0.4 + (escala - 0.55) * 1.33
-
-                if u.jaAgiu and not cena then
-                    sombra = sombra * 0.6
-                end
-
+                if u.jaAgiu and not cena then sombra = sombra * 0.6 end
                 love.graphics.setColor(0.9 * sombra, 0.8 * sombra, 0.6 * sombra, alpha)
 
+                -- Desenho do Soldado
                 if spriteSheet then
                     local escalaX = (u.faccao == 1) and escala or -escala
                     local escalaY = escala
-
                     local quadroAtual = quads.parado
 
-                    -- Lógica de Animação
                     if cena and cena.atacante == u then
                         if cena.tipo == "tiro" then
                             local tempoPorQuadro = cena.duracao / 8
@@ -456,18 +481,13 @@ local function desenharPainelSuperior()
                         local frame = math.floor(u.animTimer / 0.12) % 8
                         quadroAtual = quads.andar[frame + 1]
                     end
-
+                    
                     love.graphics.draw(spriteSheet, quadroAtual, px, py, 0, escalaX, escalaY, W_SPRITE / 2, H_SPRITE / 2)
                 else
-                    -- FALLBACK: quadrado colorido
                     local tamanhoQuadrado = 44 * escala
-                    if u.faccao == 1 then
-                        love.graphics.setColor(0.2, 0.4, 0.9, alpha)
-                    else
-                        love.graphics.setColor(0.9, 0.2, 0.2, alpha)
-                    end
+                    if u.faccao == 1 then love.graphics.setColor(0.2, 0.4, 0.9, alpha)
+                    else love.graphics.setColor(0.9, 0.2, 0.2, alpha) end
                     love.graphics.rectangle("fill", px - tamanhoQuadrado/2, py - tamanhoQuadrado/2, tamanhoQuadrado, tamanhoQuadrado)
-
                     love.graphics.setColor(0, 0, 0, alpha)
                     love.graphics.rectangle("line", px - tamanhoQuadrado/2, py - tamanhoQuadrado/2, tamanhoQuadrado, tamanhoQuadrado)
                 end
@@ -477,7 +497,6 @@ local function desenharPainelSuperior()
                     local tam = 44 * escala
                     love.graphics.rectangle("line", px - tam/2, py - tam/2, tam, tam)
                 end
-
                 if escala > 0.8 or u.hp < 5 then
                     love.graphics.setColor(1, 1, 1, alpha)
                     love.graphics.print(tostring(u.hp), px - 16 * escala, py - 24 * escala)
@@ -486,7 +505,7 @@ local function desenharPainelSuperior()
         end
     end
 
-    -- Projétil de tiro
+    -- Efeitos de Tiro e Cavar
     if cena and cena.tipo == "tiro" and cena.atacante and cena.alvo then
         if cena.t > cena.duracao * 0.25 and cena.t < cena.duracao * 0.75 then
             local progresso = (cena.t - cena.duracao * 0.25) / (cena.duracao * 0.5)
@@ -496,26 +515,24 @@ local function desenharPainelSuperior()
             local by = yTelaDaLinha(cena.alvo.y)
             local px = ax + (bx - ax) * progresso
             local py = ay + (by - ay) * progresso
-
             love.graphics.setColor(1, 0.8, 0, 0.9)
             love.graphics.circle("fill", px, py, 4)
         end
     end
 
-    -- Terra subindo no cavar
     if cena and cena.tipo == "cavar" and cena.atacante then
         local progresso = math.min(cena.t / cena.duracao, 1)
         local px = xTelaDaColuna(cena.atacante.x, cena.atacante.y)
         local py = yTelaDaLinha(cena.atacante.y)
         local tam = tamanhoNaLinha(cena.atacante.y)
-        love.graphics.setColor(0.5, 0.35, 0.15)
+        love.graphics.setColor(0.5, 0.35, 0.15, 1 - progresso) 
         love.graphics.rectangle("fill", px - tam/2, py + tam/2 - tam * progresso, tam, tam * progresso)
     end
 
     love.graphics.setColor(1,1,1, 0.7)
     love.graphics.print("Painel de Batalha", 10, 10)
-    -- Carrega linha do grid
-    desenharGridDebug() 
+    
+    desenharGridDebug()
 end
 
 local function desenharRotas()
@@ -548,7 +565,12 @@ function Jogo:draw()
     love.graphics.push()
     love.graphics.translate(0, GRID_OFFSET_Y)
 
-    love.graphics.setColor(1, 1, 1)
+    -- Fundo do Grid (chão escuro)
+    love.graphics.setColor(0.2, 0.15, 0.1)
+    love.graphics.rectangle("fill", 0, 0, COLS * CELL, ROWS * CELL)
+
+    -- Linhas do Grid
+    love.graphics.setColor(1, 1, 1, 0.5)
     for x = 0, COLS do
         love.graphics.line(x*CELL, 0, x*CELL, ROWS*CELL)
     end
@@ -556,6 +578,7 @@ function Jogo:draw()
         love.graphics.line(0, y*CELL, COLS*CELL, y*CELL)
     end
 
+    -- Trincheiras no Grid Inferior
     for cy, linha in pairs(trincheiras) do
         for cx, _ in pairs(linha) do
             love.graphics.setColor(0.4, 0.28, 0.12, 0.85)
@@ -565,6 +588,7 @@ function Jogo:draw()
         end
     end
 
+    -- Destaques de Movimento, Carga e Tiro
     if selecionada and not menuAberto and not modoMover and not modoCarga then
         love.graphics.setColor(1, 1, 0, 0.15)
         for _, u in ipairs(unidades) do
@@ -598,7 +622,7 @@ function Jogo:draw()
 
     desenharRotas()
 
-    -- Grid inferior continua com quadrados
+    -- Unidades no Grid Inferior
     for _, u in ipairs(unidades) do
         if u.hp > 0 then
             local cor = u.faccao == 1 and {0.2,0.4,0.9} or {0.9,0.2,0.2}
@@ -621,6 +645,7 @@ function Jogo:draw()
 
     love.graphics.pop()
 
+    -- Menu Radial (agora renderizado na visão de cima)
     if menuAberto and selecionada then
         for _, b in ipairs(botoesMenu) do
             love.graphics.setColor(b.habilitado and {0.2,0.2,0.2,0.9} or {0.15,0.15,0.15,0.6})
@@ -657,6 +682,7 @@ end
 function Jogo:mousepressed(mx, my, botao)
     if vencedor or cena or resolvendo then return end
 
+    -- Lógica de clique no menu (na visão superior)
     if menuAberto and selecionada then
         for _, b in ipairs(botoesMenu) do
             if mx >= b.x - b.w/2 and mx <= b.x + b.w/2
@@ -693,6 +719,7 @@ function Jogo:mousepressed(mx, my, botao)
         return
     end
 
+    -- Clique no Grid Inferior (para movimentação)
     if my < GRID_OFFSET_Y then return end
     local cx = math.floor(mx / CELL) + 1
     local cy = math.floor((my - GRID_OFFSET_Y) / CELL) + 1
@@ -727,15 +754,16 @@ function Jogo:mousepressed(mx, my, botao)
 end
 
 function Jogo:keypressed(tecla)
+    if tecla == "f1" then
+        mostrarGridDebug = not mostrarGridDebug
+        return
+    end
+
     if tecla == "escape" then
         menuAberto = false
         modoMover = false
         modoCarga = false
         selecionada = nil
-        return
-    end
-    if tecla == "f1" then
-        mostrarGridDebug = not mostrarGridDebug
         return
     end
     if tecla == "space" and not vencedor and not cena and not resolvendo
